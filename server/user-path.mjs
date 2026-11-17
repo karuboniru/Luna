@@ -1,5 +1,5 @@
 /**
- * 用户输入路径的规范化与可达性检查（Windows）。
+ * 用户输入路径的规范化与可达性检查。
  *
  * 背景（v1.2.7）：NAS 用户添加映射盘里的目录时报「目录不存在或不可访问：ENOENT」，
  * 同时看到文件夹名乱码。根因是「浏览…」用 PowerShell 取路径、按系统代码页（cp936）
@@ -27,9 +27,10 @@ const TRANSIENT_CODES = new Set(['ENOENT', 'UNKNOWN', 'ENOTCONN', 'ETIMEDOUT', '
  * 规范化用户给出的路径。
  *
  * @param {unknown} raw 输入框或对话框返回的原始值
+ * @param {{platform?: string}} [options] 默认按服务器运行系统解释路径
  * @returns {{ok: true, path: string} | {ok: false, error: string}}
  */
-export function normalizeUserPath(raw) {
+export function normalizeUserPath(raw, { platform = process.platform } = {}) {
   let p = String(raw ?? '').replace(INVISIBLE_CHARS, '').trim();
   p = p.replace(WRAPPING_QUOTES, '').trim();
 
@@ -41,6 +42,18 @@ export function normalizeUserPath(raw) {
       ok: false,
       error: '路径包含无法识别的字符（编码转换失败，通常显示为 �）。请点「浏览…」重新选择，或直接手动粘贴完整路径。',
     };
+  }
+
+  if (p.includes('\0')) return { ok: false, error: '路径包含无效的空字符' };
+
+  if (platform !== 'win32') {
+    if (p === '~' || p.startsWith('~/')) p = path.posix.join(os.homedir(), p.slice(1));
+    p = path.posix.normalize(p);
+    if (!path.posix.isAbsolute(p)) {
+      return { ok: false, error: `请填写服务器上的完整路径：${p}。例如 /media/music。` };
+    }
+    if (p !== '/') p = p.replace(/\/+$/, '');
+    return { ok: true, path: p };
   }
 
   // 正斜杠在 Windows 上等价于反斜杠；顺带把 //NAS/share 变成 \\NAS\share
@@ -157,11 +170,14 @@ export async function checkDirectory(target) {
  */
 export function describePathError(err, target) {
   const code = err?.code ?? 'UNKNOWN';
+  const windowsPath = process.platform === 'win32' || /^[A-Za-z]:[\\/]|^\\\\/.test(String(target));
   switch (code) {
     case 'ENOENT':
+      if (!windowsPath) return `目录不存在或不可访问：${target}（ENOENT）。请确认这是服务器上的完整路径，目录已挂载；容器部署时请检查媒体卷挂载及容器内路径。`;
       return `目录不存在或不可访问：${target}（ENOENT）。请依次确认：① 路径没有选错、没有乱码；② 若是 NAS 映射盘符，Luna 当前会话可能看不到这个映射（以管理员身份运行时看不到当前用户的映射盘）—— 可改填 UNC 路径，如 \\\\NAS\\共享名\\目录；③ NAS 休眠或网络未就绪，点「添加并扫描」前先在资源管理器打开一次该目录。`;
     case 'EACCES':
     case 'EPERM':
+      if (!windowsPath) return `没有访问权限：${target}（${code}）。请检查服务器进程对目录的读取与遍历权限，以及媒体卷挂载权限。`;
       return `没有访问权限：${target}（${code}）。请检查 NAS 的共享权限与该共享的登录凭据；仍不行时可在资源管理器里用同一账号打开一次。`;
     case 'ENOTCONN':
     case 'EHOSTDOWN':

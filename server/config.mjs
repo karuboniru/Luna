@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pathIdentity } from './path-identity.mjs';
 
 export const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 export const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -45,7 +46,9 @@ export const CACHE_DIR_NAME = 'luna_cache';
  * 与 DATA_DIR 的区别：缓存可能很大（几十 GB），跟 exe 走才不会污染系统盘。
  * 用户可在设置界面改成任意目录。
  */
-export const DEFAULT_CACHE_DIR = path.join(APP_ROOT, CACHE_DIR_NAME);
+export const DEFAULT_CACHE_DIR = process.env.LAM_CACHE_DIR
+  ? path.resolve(process.env.LAM_CACHE_DIR)
+  : path.join(APP_ROOT, CACHE_DIR_NAME);
 
 const DEFAULT_CONFIG = {
   port: 8787,
@@ -293,7 +296,7 @@ export const PERSIST_SEP = '\u0001';
 
 export function albumKeyOf({ album, albumArtist, artist, dir }) {
   const a = normalizeText(album);
-  if (!a) return `dir${PERSIST_SEP}${String(dir ?? '').toLowerCase()}`;
+  if (!a) return `dir${PERSIST_SEP}${pathIdentity(dir ?? '')}`;
   const who = normalizeText(albumArtist) || normalizeText(artist);
   return `alb${PERSIST_SEP}${who.toLowerCase()}${PERSIST_SEP}${a.toLowerCase()}`;
 }

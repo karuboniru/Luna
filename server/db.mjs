@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { DatabaseSync } from 'node:sqlite';
+import { pathIdentity, PATH_COLLATION } from './path-identity.mjs';
 
 import {
   DB_FILE, DATA_DIR, BACKUP_DIR, ensureDirs, albumKeyOf, normalizeText, PERSIST_SEP,
@@ -813,7 +814,7 @@ export function getLibrary(id) {
 }
 
 export function findLibraryByPath(p) {
-  return decorateLibrary(db.prepare(`${LIBRARY_SELECT} WHERE l.path = ? COLLATE NOCASE`).get(String(p)) ?? null);
+  return decorateLibrary(db.prepare(`${LIBRARY_SELECT} WHERE l.path = ? COLLATE ${PATH_COLLATION}`).get(String(p)) ?? null);
 }
 
 export function addLibrary(p, displayName = null) {
@@ -839,12 +840,12 @@ export function removeLibrary(id) {
   const prefix = lib.path.endsWith(path.sep) ? lib.path : `${lib.path}${path.sep}`;
   const albumIds = db.prepare(`
     SELECT DISTINCT album_id FROM tracks
-    WHERE library_id = ? OR lower(substr(path, 1, ?)) = lower(?)
-  `).all(Number(id), prefix.length, prefix).map((r) => r.album_id).filter(Boolean);
+    WHERE library_id = ? OR substr(path, 1, length(?)) = ? COLLATE ${PATH_COLLATION}
+  `).all(Number(id), prefix, prefix).map((r) => r.album_id).filter(Boolean);
 
   db.prepare(`
-    DELETE FROM tracks WHERE library_id = ? OR lower(substr(path, 1, ?)) = lower(?)
-  `).run(Number(id), prefix.length, prefix);
+    DELETE FROM tracks WHERE library_id = ? OR substr(path, 1, length(?)) = ? COLLATE ${PATH_COLLATION}
+  `).run(Number(id), prefix, prefix);
   db.prepare('DELETE FROM libraries WHERE id = ?').run(Number(id));
   for (const albumId of albumIds) deleteAlbumIfEmpty(albumId);
   return true;
@@ -1287,13 +1288,13 @@ export function exclusionIndex() {
   const keys = new Set();
   const paths = new Set();
   for (const r of rows) {
-    if (r.album_key) keys.add(String(r.album_key).toLowerCase());
-    if (r.root_path) paths.add(String(r.root_path).toLowerCase());
+    if (r.album_key) keys.add(pathIdentity(r.album_key));
+    if (r.root_path) paths.add(pathIdentity(r.root_path));
   }
   return {
     size: rows.length,
-    byKey: (key) => Boolean(key) && keys.has(String(key).toLowerCase()),
-    byPath: (p) => Boolean(p) && paths.has(String(p).toLowerCase()),
+    byKey: (key) => Boolean(key) && keys.has(pathIdentity(key)),
+    byPath: (p) => Boolean(p) && paths.has(pathIdentity(p)),
   };
 }
 
@@ -1491,10 +1492,10 @@ export function countTracksInLibrary(libraryId) {
  * @param {object} rec { path, libraryId, format, entryCount, audioCount, imageCount,
  *                       videoCount, packedBytes, unpackedBytes, encrypted,
  *                       unsupported, nameEncoding, status, error, fileSize, fileMtime }
- * @param {Array<object>} members 成员清单（可空）
+ * @param {Array<object> | null} members 成员清单；null 保留旧清单，[] 清空清单
  * @returns {number} archive id
  */
-export function upsertArchive(rec = {}, members = []) {
+export function upsertArchive(rec = {}, members = null) {
   const t = now();
   const existing = db.prepare('SELECT id, created_at FROM archives WHERE path = ?').get(String(rec.path));
   let id;
@@ -1533,8 +1534,9 @@ export function upsertArchive(rec = {}, members = []) {
     id = Number(info.lastInsertRowid);
   }
 
-  // 成员清单整体替换：先删后插，保证包内容变化后不残留旧成员
-  db.prepare('DELETE FROM archive_members WHERE archive_id = ?').run(id);
+  // An omitted listing means parsing failed: retain the last known members.
+  // A successful empty listing explicitly passes [] and clears the old members.
+  if (Array.isArray(members)) db.prepare('DELETE FROM archive_members WHERE archive_id = ?').run(id);
   if (Array.isArray(members) && members.length) {
     const insert = db.prepare(`
       INSERT OR REPLACE INTO archive_members
@@ -1581,9 +1583,12 @@ export function countArchiveMembers(archiveId) {
 
 /** 路径前缀下的所有压缩包（重扫单个发行用） */
 export function archivesUnder(rootPath) {
-  const prefix = String(rootPath);
-  return db.prepare('SELECT * FROM archives WHERE path = ? OR path LIKE ? ORDER BY path')
-    .all(prefix, `${prefix}${path.sep}%`);
+  const root = String(rootPath);
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  return db.prepare(`SELECT * FROM archives
+    WHERE path = ? COLLATE ${PATH_COLLATION}
+      OR substr(path, 1, length(?)) = ? COLLATE ${PATH_COLLATION} ORDER BY path`)
+    .all(root, prefix, prefix);
 }
 
 /** 删除一个压缩包登记及其成员与曲目；返回删除的曲目数 */
@@ -1812,7 +1817,7 @@ export function syncCoverFlags() {
 
 /** 音声发行的专辑键：按发行根路径唯一 */
 export function voiceAlbumKey(releaseRoot) {
-  return `voice${PERSIST_SEP}${String(releaseRoot).toLowerCase()}`;
+  return `voice${PERSIST_SEP}${pathIdentity(releaseRoot)}`;
 }
 
 export function findVoiceAlbum(releaseRoot) {
@@ -1960,9 +1965,11 @@ export function listVoiceTracks(albumId) {
 /** 按发行根列出已入库的曲目路径（扫描清理用） */
 export function trackPathsUnder(rootPath) {
   const prefix = rootPath.endsWith(path.sep) ? rootPath : `${rootPath}${path.sep}`;
+  const virtualPrefix = `${rootPath}${PERSIST_SEP}`;
   return db.prepare(`
-    SELECT path FROM tracks WHERE lower(substr(path, 1, ?)) = lower(?)
-  `).all(prefix.length, prefix).map((r) => r.path);
+    SELECT path FROM tracks WHERE substr(path, 1, length(?)) = ? COLLATE ${PATH_COLLATION}
+      OR substr(path, 1, length(?)) = ? COLLATE ${PATH_COLLATION}
+  `).all(prefix, prefix, virtualPrefix, virtualPrefix).map((r) => r.path);
 }
 
 /* ================================================================== queries */

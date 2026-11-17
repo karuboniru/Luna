@@ -105,10 +105,18 @@ export function locateRelease(filePath) {
   if (!codes.length) return null;
 
   const first = codes[0];
+  // Slice the original string so POSIX roots, drive letters and UNC prefixes survive.
+  const throughSegment = (source, index) => {
+    const segments = [...String(source).matchAll(/[^\\/]+/g)];
+    const segment = segments[index];
+    return String(source).slice(0, segment.index + segment[0].length);
+  };
   // 发行根 = 从头到「最外层 RJ 所在段」的完整路径；压缩包边界原样保留。
   const releaseRoot = first.layer === 'archive'
-    ? archiveSegs.slice(0, first.index + 1).join(path.sep)
-    : `${archiveSegs.join(path.sep)}${isVirtual ? PERSIST_SEP : ''}${members.slice(0, first.index + 1).join(path.sep)}`;
+    ? throughSegment(archive, first.index)
+    : isVirtual
+      ? `${archive}${PERSIST_SEP}${throughSegment(String(filePath).slice(archive.length + 1), first.index)}`
+      : throughSegment(filePath, first.index);
 
   return {
     rjCode: first.code,
@@ -488,9 +496,9 @@ export function pickTrackArtist(artists = []) {
 function walkFiles(root) {
   const out = [];
   (function walk(dir) {
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const e of entries) {
+      if (e.isSymbolicLink()) continue;
       const full = path.join(dir, e.name);
       if (e.isDirectory()) { walk(full); continue; }
       const ext = path.extname(e.name).toLowerCase();
@@ -498,8 +506,7 @@ function walkFiles(root) {
         : VIDEO_EXT.has(ext) ? 'video'
           : IMAGE_EXT.has(ext) ? 'image'
             : 'other';
-      let size = 0;
-      try { size = fs.statSync(full).size; } catch { /* 忽略 */ }
+      const size = fs.statSync(full).size;
       out.push({ path: full, name: e.name, ext, kind, size });
     }
   }(root));

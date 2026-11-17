@@ -21,6 +21,10 @@ import {
 
 /** 扫描时一并收集视频（仅音声发行会用到它们） */
 const SCAN_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...VIDEO_EXT]);
+const FILESYSTEM_READ_ERRORS = new Set([
+  'EACCES', 'EPERM', 'ENOENT', 'EIO', 'ESTALE', 'ENOTCONN', 'ETIMEDOUT',
+  'EHOSTDOWN', 'ENETUNREACH', 'EBUSY',
+]);
 
 /** 音声发行自动打上的标签名 */
 const ASMR_TAG_NAME = 'ASMR';
@@ -308,6 +312,7 @@ export const scanState = {
   coverBytesReclaimed: 0,
   brokenCovers: 0,
   removed: 0,
+  incompleteLibraries: 0,
   albumsCreated: 0,
   albumsMerged: 0,
   // 压缩包（P1 只读挂载）：见 docs/压缩包支持设计.md §5.3
@@ -364,6 +369,7 @@ function resetState() {
     coverBytesReclaimed: 0,
     brokenCovers: 0,
     removed: 0,
+    incompleteLibraries: 0,
     albumsCreated: 0,
     albumsMerged: 0,
     archivesFound: 0,
@@ -409,6 +415,7 @@ function persistLastScan() {
       updated: scanState.updated,
       skipped: scanState.skipped,
       removed: scanState.removed,
+      incompleteLibraries: scanState.incompleteLibraries,
       failed: scanState.failed,
       coverExtracted: scanState.coverExtracted,
       coversReclaimed: scanState.coversReclaimed,
@@ -455,6 +462,7 @@ export function lastScanReport() {
 async function walkAudioFiles(root) {
   const found = [];
   const archives = [];
+  let complete = true;
   const stack = [root];
   while (stack.length) {
     if (scanState.cancelRequested) break;
@@ -463,6 +471,7 @@ async function walkAudioFiles(root) {
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch (err) {
+      complete = false;
       pushError(`无法读取目录：${dir}（${err.code ?? err.message}）`);
       continue;
     }
@@ -484,7 +493,7 @@ async function walkAudioFiles(root) {
       }
     }
   }
-  return { files: found, archives };
+  return { files: found, archives, complete };
 }
 
 /* ------------------------------------------------------ 音声发行（三层模型） */
@@ -683,8 +692,10 @@ async function ingestArchive({ archivePath, libraryId, seen, known, forceVoice =
     const status = err.code === 'NOT_ZIP' ? 'not_archive' : 'error';
     store.upsertArchive({
       path: archivePath, libraryId, format: 'zip', status, error: err.message,
-    }, []);
+    });
     known.archives.set(archivePath, { id: store.getArchiveByPath(archivePath)?.id ?? null, info: null });
+    const previousId = store.getArchiveByPath(archivePath)?.id;
+    if (previousId) for (const p of store.trackPathsInArchive(previousId)) seen.add(p);
     scanState.archivesFailed += 1;
     pushError(`压缩包无法解析：${archivePath}（${err.message}）`);
     return { error: err.message };
@@ -748,12 +759,13 @@ async function ingestArchive({ archivePath, libraryId, seen, known, forceVoice =
   const useVoice = forceVoice || audioFiles.some((f) => locateRelease(f.path));
   const plainMembers = audioFiles.filter((f) => !locateRelease(f.path));
 
-  const result = { tracks: 0 };
+  const result = { tracks: 0, complete: true };
   if (useVoice) {
     const r = await ingestRelease({
       root: archivePath, libraryId, seen, files: virtualFiles, readTags: false, known,
     });
     result.tracks = (result.tracks ?? 0) + (r.tracks ?? 0);
+    if (r.complete === false) result.complete = false;
   } else if (plainMembers.length) {
     result.tracks = (result.tracks ?? 0) + await ingestMusicArchiveMembers({
       archivePath, archiveId, members: plainMembers, libraryId, seen,
@@ -850,6 +862,7 @@ async function ingestMusicArchiveMembers({ archivePath, archiveId, members, libr
       else scanState.added += 1;
       n += 1;
     } catch (err) {
+      seen.add(vpath);
       pushError(`包内曲目入库失败：${vpath}（${err.code ?? err.message}）`);
     } finally {
       scanState.processed += 1;
@@ -873,6 +886,7 @@ export async function rescanReleaseRoot({ releaseRoot, libraryId }) {
   const result = isArchiveName(releaseRoot) && looksLikeZip(releaseRoot)
     ? await ingestArchive({ archivePath: releaseRoot, libraryId, seen, known, forceVoice })
     : await ingestRelease({ root: releaseRoot, libraryId, seen });
+  if (result?.error || result?.complete === false) throw new Error(result.error || '发行扫描不完整，已保留原索引');
   let removed = 0;
   for (const p of store.trackPathsUnder(releaseRoot)) {
     if (!seen.has(p)) { store.deleteTrackByPath(p); removed += 1; }
@@ -977,6 +991,7 @@ async function ingestRelease({ root, libraryId, seen, files = null, readTags = t
 
   // 轨道
   let trackCount = 0;
+  let complete = true;
   for (const row of [...analysis.tracks, ...analysis.bonusTracks]) {
     for (const entry of row.versions) {
       const isVideo = entry.file.kind === 'video';
@@ -995,6 +1010,7 @@ async function ingestRelease({ root, libraryId, seen, files = null, readTags = t
           ? await resolveVirtualTrack(entry.file, known)
           : await resolveDiskTrack(entry.file);
       } catch (err) {
+        complete = false;
         // 文件在解析与写入之间消失：如实记录，不静默丢弃
         pushError(`曲目跳过：${filePath}（${err.code ?? err.message}）`);
         continue;
@@ -1076,7 +1092,7 @@ async function ingestRelease({ root, libraryId, seen, files = null, readTags = t
    */
   syncAsmrTag(albumId, root);
 
-  return { albumId, versions: analysis.versions.length, tracks: trackCount };
+  return { albumId, versions: analysis.versions.length, tracks: trackCount, complete };
 }
 
 /* -------------------------------------------------------------------- covers */
@@ -1102,7 +1118,17 @@ async function persistCoverImage(buffer, mime, source) {
 
 async function coverFromDirectory(dir) {
   if (!dir) return null;
-  for (const name of COVER_FILE_CANDIDATES) {
+  let names;
+  try {
+    names = (await fsp.readdir(dir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile()).map((entry) => entry.name).sort();
+  } catch { return null; }
+  for (const preferred of COVER_FILE_CANDIDATES) {
+    // Match conventional cover names regardless of spelling while retaining the
+    // exact on-disk filename on case-sensitive filesystems.
+    const name = names.find((item) => item === preferred)
+      ?? names.find((item) => item.toLowerCase() === preferred);
+    if (!name) continue;
     const candidate = path.join(dir, name);
     try {
       const stat = await fsp.stat(candidate);
@@ -1217,6 +1243,9 @@ async function readTags(file) {
       parseError: null,
     };
   } catch (err) {
+    // Parser failures can fall back to filenames. Filesystem failures cannot establish
+    // that the file was read, so keep its old index and let a later scan retry.
+    if (FILESYSTEM_READ_ERRORS.has(err?.code)) throw err;
     return {
       ...base,
       title: path.basename(file, ext),
@@ -1296,10 +1325,12 @@ async function runScan({ libraryIds }) {
     try {
       stat = await fsp.stat(lib.path);
     } catch (err) {
+      scanState.incompleteLibraries += 1;
       pushError(`音乐库不存在或不可访问：${lib.path}（${err.code ?? err.message}）`);
       continue;
     }
     if (!stat.isDirectory()) {
+      scanState.incompleteLibraries += 1;
       pushError(`音乐库路径不是目录：${lib.path}`);
       continue;
     }
@@ -1311,6 +1342,7 @@ async function runScan({ libraryIds }) {
     } catch { /* 清理失败不阻塞扫描 */ }
 
     const walked = await walkAudioFiles(lib.path);
+    let complete = walked.complete;
     const allFiles = walked.files;
     scanState.filesFound += allFiles.length;
     scanState.phase = '解析标签';
@@ -1365,14 +1397,16 @@ async function runScan({ libraryIds }) {
             seen,
             ...(group.explicit ? { files: group.files.map(diskFileRecord) } : {}),
           });
+          if (r.complete === false) complete = false;
           scanState.releasesIngested = (scanState.releasesIngested ?? 0) + 1;
           scanState.releaseTracks = (scanState.releaseTracks ?? 0) + r.tracks;
         } catch (err) {
+          complete = false;
           pushError(`音声发行解析失败：${root}（${err.message}）`);
-          // 失败时保守处理：这些文件不进入 seen，交由清理阶段决定，避免误删
+          // Failed releases leave their existing index intact until a complete scan.
           for (const f of group.files) seen.add(f);
         }
-        scanState.processed += group.length;
+        scanState.processed += group.files.length;
       }
       scanState.phase = '解析标签';
     }
@@ -1389,8 +1423,10 @@ async function runScan({ libraryIds }) {
           const r = await ingestArchive({
             archivePath, libraryId: lib.id, seen, known, forceVoice: voiceLibrary,
           });
+          if (r?.error || r?.complete === false) complete = false;
           if (r?.tracks) scanState.releasesIngested = (scanState.releasesIngested ?? 0) + 1;
         } catch (err) {
+          complete = false;
           scanState.archivesFailed += 1;
           pushError(`压缩包处理失败：${archivePath}（${err.message}）`);
           // 保守处理：该包已登记的曲目一律视为已见，避免被清理阶段误删
@@ -1496,6 +1532,8 @@ async function runScan({ libraryIds }) {
           else scanState.added += 1;
           if (tags.parseError) pushError(`标签解析失败：${file}（${tags.parseError}）`);
         } catch (err) {
+          complete = false;
+          seen.add(file);
           pushError(`处理失败：${file}（${err.code ?? err.message}）`);
         } finally {
           scanState.processed += 1;
@@ -1506,7 +1544,11 @@ async function runScan({ libraryIds }) {
     const concurrency = 4;
     await Promise.all(Array.from({ length: concurrency }, worker));
 
-    if (!scanState.cancelRequested) {
+    if (!scanState.cancelRequested && !complete) {
+      scanState.incompleteLibraries += 1;
+      pushError(`音乐库扫描不完整，已保留原索引，跳过失效条目清理：${lib.path}`);
+    }
+    if (!scanState.cancelRequested && complete) {
       scanState.phase = '清理失效条目';
       const trackPaths = store.trackPathsInLibrary(lib.id);
       for (const p of trackPaths) {

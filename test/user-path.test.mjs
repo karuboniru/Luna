@@ -14,8 +14,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
-  normalizeUserPath, decodePickedPath, checkDirectory, describePathError, statDirectory,
+  normalizeUserPath as normalizeNativeUserPath, decodePickedPath, checkDirectory, describePathError, statDirectory,
 } from '../server/user-path.mjs';
+
+// Exercise Windows behavior on every CI host; production defaults to the host OS.
+const normalizeUserPath = (raw) => normalizeNativeUserPath(raw, { platform: 'win32' });
+
+test('POSIX 路径保留根、大小写、Unicode 和合法反斜杠', () => {
+  const normalize = (raw) => normalizeNativeUserPath(raw, { platform: 'linux' });
+  assert.deepEqual(normalize(' "/media/音乐/Album/../ALBUM/" '), { ok: true, path: '/media/音乐/ALBUM' });
+  assert.deepEqual(normalize('/'), { ok: true, path: '/' });
+  assert.deepEqual(normalize('/media/a\\b'), { ok: true, path: '/media/a\\b' });
+  assert.deepEqual(normalize('~/Music'), { ok: true, path: path.posix.join(os.homedir(), 'Music') });
+  assert.equal(normalize('Music').ok, false);
+  assert.equal(normalize('C:\\Music').ok, false);
+  assert.equal(normalize('/media/invalid\0name').ok, false);
+});
+
+test('路径默认使用宿主系统', () => {
+  const raw = process.platform === 'win32' ? 'C:\\Music' : '/media/Music';
+  assert.deepEqual(normalizeNativeUserPath(raw), { ok: true, path: raw });
+});
 
 /* ------------------------------------------------------------- 规范化 */
 
@@ -118,8 +137,7 @@ test('自检：不存在的目录给出含路径与排查步骤的提示', async
   assert.equal(r.ok, false);
   assert.ok(r.message.includes(missing), '提示里要带完整路径');
   assert.match(r.message, /ENOENT/);
-  assert.match(r.message, /管理员/);
-  assert.match(r.message, /UNC/);
+  assert.match(r.message, process.platform === 'win32' ? /UNC/ : /服务器|挂载/);
 });
 
 test('自检：文件不是目录', async () => {

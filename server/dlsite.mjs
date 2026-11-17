@@ -21,6 +21,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { APP_ROOT, DATA_DIR } from './config.mjs';
+import { pathIdentity } from './path-identity.mjs';
 
 export const INDEX_FILE_NAME = 'rj_index.sqlite3';
 
@@ -45,7 +46,7 @@ export function indexCandidates() {
   // 同一路径只留一次（三处常常全落在同一目录）
   const seen = new Set();
   return list.filter((p) => {
-    const key = p.toLowerCase();
+    const key = pathIdentity(p);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

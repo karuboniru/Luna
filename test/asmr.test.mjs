@@ -51,6 +51,14 @@ test('RJ 号定位：取路径中最靠外的一个', () => {
   const r = locateRelease('E:\\Music\\[RJ01182623]专辑\\内层\\[RJ01187370]特典\\a.mp3');
   assert.equal(r.rjCode, 'RJ01182623');
   assert.deepEqual(r.nestedRjCodes, ['RJ01187370']);
+  assert.equal(r.releaseRoot, 'E:\\Music\\[RJ01182623]专辑');
+});
+
+test('RJ 根定位保留 POSIX 根与压缩包边界', () => {
+  assert.equal(locateRelease('/media/音乐/[RJ123456]作品/01.mp3').releaseRoot, '/media/音乐/[RJ123456]作品');
+  assert.equal(locateRelease('/media/[RJ123456]作品.zip\u000101.mp3').releaseRoot, '/media/[RJ123456]作品.zip');
+  assert.equal(locateRelease('/media/work.zip\u0001[RJ123456]作品/01.mp3').releaseRoot, '/media/work.zip\u0001[RJ123456]作品');
+  assert.equal(locateRelease('\\\\NAS\\share\\[RJ123456]作品\\01.mp3').releaseRoot, '\\\\NAS\\share\\[RJ123456]作品');
 });
 
 test('标题候选：去掉 [RJxxxxxxxx] 前缀', () => {

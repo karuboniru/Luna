@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { BACKUP_DIR, ensureDirs } from './config.mjs';
-import { db, getMeta, setMeta, listLibraries } from './db.mjs';
+import { db, getMeta, setMeta, listLibraries, findLibraryByPath } from './db.mjs';
 
 export const ASSET_VERSION = 1;
 const AUTO_BACKUP_KEEP = 10;
@@ -94,7 +94,7 @@ export function importUserAssets(payload) {
   db.exec('BEGIN');
   try {
     for (const lib of payload.libraries ?? []) {
-      const exists = db.prepare('SELECT id FROM libraries WHERE path = ? COLLATE NOCASE').get(lib.path);
+      const exists = findLibraryByPath(lib.path);
       if (exists) {
         if (lib.displayName) {
           db.prepare('UPDATE libraries SET display_name = ? WHERE id = ?').run(lib.displayName, exists.id);
