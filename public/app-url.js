@@ -15,6 +15,11 @@ export function appUrl(value, baseURI = document.baseURI) {
 
   const basePath = base.pathname.endsWith('/') ? base.pathname : `${base.pathname}/`;
   const mountRoot = basePath === '/' ? '/' : basePath.slice(0, -1);
+  // A mount such as /api or /api/albums can overlap a logical API route.
+  // Only the explicit mount + /api/ form is already prefixed in that case.
+  if (mountRoot !== '/' && input.startsWith('/api/') && !input.startsWith(`${mountRoot}/api/`)) {
+    return new URL(input.slice(1), base).href;
+  }
   const alreadyMounted = mountRoot !== '/' &&
     (input === mountRoot || input.startsWith(`${mountRoot}/`) ||
       input.startsWith(`${mountRoot}?`) || input.startsWith(`${mountRoot}#`));

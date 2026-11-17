@@ -48,3 +48,11 @@ test('app URL: prefix matching observes path segment boundaries', () => {
   assert.equal(appUrl('/luna-other/file', base), `${base}luna-other/file`);
   assert.equal(appUrl('/luna', base), `${origin}/luna`);
 });
+
+test('app URL: API-looking mount names do not swallow logical API routes', () => {
+  for (const mount of ['/api', '/api/albums']) {
+    const base = `${origin}${mount}/`;
+    assert.equal(appUrl('/api/albums?limit=1', base), `${base}api/albums?limit=1`);
+    assert.equal(appUrl(`${mount}/api/stream/42`, base), `${base}api/stream/42`);
+  }
+});

@@ -4,12 +4,20 @@
  * 纯函数测试：只喂条目清单，不碰磁盘、不碰数据库。
  * 真机端到端（扫出封面、包不被改动）由 tools/check/archive.mjs 与手工验收覆盖。
  */
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 
-import { virtualPath } from '../server/zip-reader.mjs';
-import { pickArchiveCoverEntry } from '../server/scanner.mjs';
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-isolated-test-'));
+process.env.LAM_DATA_DIR = sandbox;
+const { virtualPath } = await import('../server/zip-reader.mjs');
+const { pickArchiveCoverEntry } = await import('../server/scanner.mjs');
+const { closeDb } = await import('../server/db.mjs');
+after(() => { closeDb(); fs.rmSync(sandbox, { recursive: true, force: true }); });
+
+
 
 const ZIP = path.join('E:', 'Music', 'Album', '示例.zip');
 /** 专辑虚拟目录：包根传 ''，子目录传目录名 */

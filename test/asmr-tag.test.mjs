@@ -5,10 +5,19 @@
  * 只按路径判定，与是否带 RJ 号、是否压缩包都无关。
  */
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { test, after } from 'node:test';
 
-import { isUnderAsmrFolder } from '../server/scanner.mjs';
-import { PERSIST_SEP } from '../server/config.mjs';
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-isolated-test-'));
+process.env.LAM_DATA_DIR = sandbox;
+const { isUnderAsmrFolder } = await import('../server/scanner.mjs');
+const { PERSIST_SEP } = await import('../server/config.mjs');
+const { closeDb } = await import('../server/db.mjs');
+after(() => { closeDb(); fs.rmSync(sandbox, { recursive: true, force: true }); });
+
+
 
 test('ASMR 判定：目录段精确匹配，与大小写无关', () => {
   const yes = [
