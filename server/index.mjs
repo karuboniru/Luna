@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 
 import express from 'express';
+import { BASE_PATH, prefixResponseUrls, renderHtml, listDirectories } from './web-host.mjs';
 
 import {
   PUBLIC_DIR, COVER_DIR, THUMB_DIR, DATA_DIR, MIME_BY_EXT, readConfig, writeConfig, ensureDirs,
@@ -46,7 +47,21 @@ let selfUrl = null;
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '32mb' }));
-app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
+app.use((req, res, next) => {
+  const json = res.json.bind(res);
+  res.json = (value) => json(prefixResponseUrls(value));
+  next();
+});
+// Inject a stable base before serving HTML; the browser resolves assets against it.
+app.use(async (req, res, next) => {
+  const pages = new Set(['/', '/index.html', '/desktop-lyrics.html', '/desktop-lyrics-menu.html']);
+  if (!['GET', 'HEAD'].includes(req.method) || !pages.has(req.path)) return next();
+  try {
+    const file = req.path === '/' ? 'index.html' : req.path.slice(1);
+    res.type('html').send(renderHtml(await fsp.readFile(path.join(PUBLIC_DIR, file), 'utf8')));
+  } catch (err) { next(err); }
+});
+app.use(express.static(PUBLIC_DIR, { index: false }));
 
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -133,6 +148,14 @@ app.get('/api/health', (req, res) => {
     node: process.version,
     dataDir: DATA_DIR,
     uptime: process.uptime(),
+    basePath: BASE_PATH,
+    capabilities: {
+      nativeDialogs: nativeDialogAvailable(),
+      reveal: Boolean(process.versions.electron) && process.platform === 'win32',
+      desktopLyrics: desktopLyrics.isAvailable(),
+      tray: Boolean(process.versions.electron),
+      serverBrowser: true,
+    },
     migration: store.migrationReport,
     // 桌面外壳信息：是否跑在 Electron 里、能不能用原生选择框（浏览器模式为 false）
     desktop: {
@@ -152,6 +175,14 @@ app.get('/api/stats', (req, res) => {
     lastBackupAt: assets.lastBackupAt(),
   });
 });
+
+app.get('/api/directories', asyncRoute(async (req, res) => {
+  try {
+    res.json(await listDirectories(typeof req.query.path === 'string' ? req.query.path : undefined));
+  } catch (err) {
+    res.status(err.status || (err.code === 'EACCES' ? 403 : 400)).json({ error: `无法读取服务器目录：${err.message}` });
+  }
+}));
 
 /* ---------------------------------------------------------------- libraries */
 
@@ -226,6 +257,7 @@ async function finishFolderPick(res, picked) {
 }
 
 app.post('/api/dialog/folder', asyncRoute(async (req, res) => {
+  if (!process.versions.electron) return res.status(409).json({ error: '网页模式请使用服务器目录浏览器' });
   try {
     /*
      * 桌面版直接走 Electron 主进程的 dialog（服务就跑在主进程里，无需 preload / IPC）：
@@ -256,6 +288,7 @@ app.post('/api/dialog/folder', asyncRoute(async (req, res) => {
  * 与选目录分开：这里限定图片扩展名。
  */
 app.post('/api/dialog/image', asyncRoute(async (req, res) => {
+  if (!process.versions.electron) return res.status(409).json({ error: '网页模式请上传背景图片' });
   try {
     // 桌面版走原生选图框；浏览器模式退回 PowerShell
     const native = await showNativeDialog({
@@ -352,6 +385,7 @@ app.get('/api/local-image', asyncRoute(async (req, res) => {
 }));
 
 app.post('/api/reveal', (req, res) => {
+  if (!process.versions.electron || process.platform !== 'win32') return res.status(409).json({ error: '文件定位仅 Windows 桌面版支持' });
   const id = Number(req.body?.trackId);
   const track = Number.isFinite(id) ? store.getTrack(id) : null;
   const target = track ? track.path : String(req.body?.path ?? '').trim();
@@ -1791,9 +1825,9 @@ app.post('/api/albums/:id/cache/clear', asyncRoute(async (req, res) => {
 
 /* -------------------------------------------------------------- spa fallback */
 
-app.get(/^\/(?!api\/).*/, (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
-});
+app.get(/^\/(?!api(?:\/|$)).*/, asyncRoute(async (req, res) => {
+  res.type('html').send(renderHtml(await fsp.readFile(path.join(PUBLIC_DIR, 'index.html'), 'utf8')));
+}));
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
@@ -1805,8 +1839,18 @@ app.use((err, req, res, next) => {
 const port = Number(process.env.PORT || config.port || 8787);
 const host = process.env.HOST || config.host || '127.0.0.1';
 
-const server = app.listen(port, host, () => {
-  selfUrl = `http://${host}:${port}`;
+const hostApp = express();
+hostApp.disable('x-powered-by');
+if (BASE_PATH) {
+  hostApp.get(BASE_PATH, (req, res, next) => {
+    if (req.path.endsWith('/')) return next();
+    const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+    res.redirect(308, `${BASE_PATH}/${query}`);
+  });
+}
+hostApp.use(BASE_PATH || '/', app);
+const server = hostApp.listen(port, host, () => {
+  selfUrl = `http://${host}:${server.address().port}${BASE_PATH}`;
   console.log(`Luna v${APP_VERSION} 已启动： ${selfUrl}`);
   console.log(`数据目录： ${DATA_DIR}`);
   if (store.migrationReport.migrated) {

@@ -1,3 +1,5 @@
+import { appUrl } from './app-url.js';
+
 /*
  * 桌面歌词的右键菜单（独立小窗口）。
  *
@@ -19,7 +21,7 @@ let cfg = {};
 let state = {};
 
 async function post(action, extra = {}) {
-  const res = await fetch('/api/desktop-lyrics', {
+  const res = await fetch(appUrl('/api/desktop-lyrics'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, ...extra }),
@@ -157,8 +159,8 @@ document.addEventListener('keydown', (event) => {
 async function boot() {
   try {
     const [config, status] = await Promise.all([
-      fetch('/api/config').then((r) => r.json()),
-      fetch('/api/desktop-lyrics').then((r) => r.json()),
+      fetch(appUrl('/api/config')).then((r) => r.json()),
+      fetch(appUrl('/api/desktop-lyrics')).then((r) => r.json()),
     ]);
     cfg = config.config?.desktopLyrics ?? {};
     state = status ?? {};

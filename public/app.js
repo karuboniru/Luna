@@ -1,3 +1,5 @@
+import { appUrl } from './app-url.js';
+
 /* 本地专辑管理软件 V2.1 —— 前端逻辑（原生 ES 模块，零依赖） */
 
 /* ------------------------------------------------------------------ 工具 */
@@ -40,7 +42,7 @@ const debounce = (fn, ms = 260) => {
 };
 
 async function api(path, options = {}) {
-  const res = await fetch(path, {
+  const res = await fetch(appUrl(path), {
     headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
@@ -49,6 +51,94 @@ async function api(path, options = {}) {
   const data = text ? JSON.parse(text) : {};
   if (!res.ok) throw new Error(data.error ?? `请求失败（${res.status}）`);
   return data;
+}
+
+// A browser connected to an Electron server still uses server paths and uploads.
+const desktopClient = /electron/i.test(navigator.userAgent);
+const runtime = {
+  nativeDialogs: desktopClient,
+  reveal: desktopClient,
+  desktopLyrics: desktopClient,
+  tray: desktopClient,
+};
+
+async function loadRuntime() {
+  try {
+    const { capabilities = {} } = await api('/api/health');
+    for (const key of Object.keys(runtime)) {
+      runtime[key] = desktopClient && (capabilities[key] ?? runtime[key]);
+    }
+  } catch { /* Existing desktop servers can use the user agent fallback. */ }
+  document.documentElement.dataset.runtime = desktopClient ? 'desktop' : 'web';
+  $('#desktopLyricsBtn').hidden = !runtime.desktopLyrics;
+}
+
+/** Pick a path on the server, rather than a directory on the browser's machine. */
+function chooseServerDirectory(initialPath = '') {
+  const dialog = $('#directoryDialog');
+  const input = $('#directoryPath');
+  const list = $('#directoryList');
+  const error = $('#directoryError');
+  const select = $('#directorySelect');
+  const parent = $('#directoryParent');
+  const status = $('#directoryStatus');
+  const listeners = new AbortController();
+  const { signal } = listeners;
+  let current = null;
+  let sequence = 0;
+
+  const load = async (path = '') => {
+    const request = ++sequence;
+    current = null;
+    list.replaceChildren();
+    select.disabled = true;
+    parent.disabled = true;
+    error.hidden = true;
+    status.textContent = '正在读取…';
+    try {
+      const data = await api(`/api/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+      if (request !== sequence || signal.aborted) return;
+      current = data;
+      input.value = data.path;
+      select.disabled = false;
+      parent.disabled = !data.parent;
+      status.textContent = data.directories.length ? `${data.directories.length} 个子目录` : '没有子目录';
+      for (const directory of data.directories) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'directory-entry';
+        button.textContent = `📁 ${directory.name}`;
+        button.title = directory.path;
+        button.addEventListener('click', () => { void load(directory.path); }, { signal });
+        list.appendChild(button);
+      }
+    } catch (err) {
+      if (request !== sequence || signal.aborted) return;
+      status.textContent = '';
+      error.textContent = err.message;
+      error.hidden = false;
+    }
+  };
+
+  return new Promise((resolve) => {
+    const finish = (path) => {
+      listeners.abort();
+      dialog.close();
+      resolve(path);
+    };
+    $('#directoryGo').addEventListener('click', () => { void load(input.value.trim()); }, { signal });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); void load(input.value.trim()); }
+    }, { signal });
+    parent.addEventListener('click', () => { if (current?.parent) void load(current.parent); }, { signal });
+    select.addEventListener('click', () => { if (current) finish(current.path); }, { signal });
+    $('#directoryCancel').addEventListener('click', () => finish(null), { signal });
+    dialog.addEventListener('cancel', (event) => { event.preventDefault(); finish(null); }, { signal });
+    dialog.addEventListener('close', () => { listeners.abort(); resolve(null); }, { signal });
+    input.value = initialPath;
+    dialog.showModal();
+    void load(initialPath);
+  });
 }
 
 let toastTimer;
@@ -327,7 +417,7 @@ const thumbSupported = () => typeof caches !== 'undefined'
   && typeof createImageBitmap === 'function'
   && typeof OffscreenCanvas === 'function';
 
-const thumbRequest = (hash, width) => new Request(`/__lam_thumb/${hash}-${width}`);
+const thumbRequest = (hash, width) => new Request(appUrl(`/__lam_thumb/${hash}-${width}`));
 
 function thumbKeyOf(hash, width) {
   return `${hash}:${width}`;
@@ -373,7 +463,7 @@ async function pumpThumbs() {
 
 async function generateThumb({ hash, originalUrl, width }) {
   try {
-    const res = await fetch(originalUrl);
+    const res = await fetch(appUrl(originalUrl));
     if (!res.ok) return;
     const blob = await res.blob();
     const bitmap = await createImageBitmap(blob, { resizeWidth: width, resizeQuality: 'high' });
@@ -415,7 +505,7 @@ const galleryThumbUrls = new Map();
 const galleryThumbPending = new Map();
 let galleryThumbChain = Promise.resolve();
 
-const galleryThumbRequest = (key, width) => new Request(`/__lam_gthumb/${key}-${width}`);
+const galleryThumbRequest = (key, width) => new Request(appUrl(`/__lam_gthumb/${key}-${width}`));
 const galleryThumbKeyOf = (key, width) => `${key}:${width}`;
 
 /** 生成并缓存一张画廊缩略图（同一 key 只跑一次，串行生成避免同时解码多张原图） */
@@ -425,7 +515,7 @@ function buildGalleryThumb(key, url, width) {
   if (galleryThumbPending.has(cacheKey)) return galleryThumbPending.get(cacheKey);
 
   const job = galleryThumbChain.then(async () => {
-    const res = await fetch(url);
+    const res = await fetch(appUrl(url));
     if (!res.ok) throw new Error('取图失败');
     const blob = await res.blob();
     const bitmap = await createImageBitmap(blob, { resizeWidth: width, resizeQuality: 'high' });
@@ -543,7 +633,7 @@ function detailCoverMarkup(album) {
   const inner = coverMarkup(album.cover_url, album.album, album.cover_hash, { eager: true });
   if (!album.cover_url) return `<div class="detail-cover">${inner}</div>`;
   return `<button type="button" class="detail-cover is-zoomable" data-cover-zoom
-            data-cover-url="${esc(album.cover_url)}" title="点击查看完整封面原图">
+            data-cover-url="${esc(appUrl(album.cover_url))}" title="点击查看完整封面原图">
             ${inner}
           </button>`;
 }
@@ -562,6 +652,7 @@ function archiveCacheButtons(album) {
 function coverMarkup(url, name, hash = null, { eager = false } = {}) {
   const initial = esc((name ?? '?').trim().charAt(0).toUpperCase() || '?');
   if (!url) return `<div class="placeholder">${initial}</div>`;
+  url = appUrl(url);
   const src = eager ? `src="${esc(url)}"` : '';
   return `<div class="placeholder">${initial}</div>
           <img ${src} alt="" loading="lazy"
@@ -1008,7 +1099,7 @@ function voiceDetailMarkup(album, data, gallery = null) {
             <svg viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></svg> 播放本版本
           </button>
           <button class="btn" id="tagAlbumBtn">🏷 标签</button>
-          <button class="btn" id="revealAlbumBtn">
+          <button class="btn" id="revealAlbumBtn"${runtime.reveal ? '' : ' hidden'}>
             <svg viewBox="0 0 24 24"><path d="M3 7h5l2 2h11v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> 打开文件夹
           </button>
           ${archiveCacheButtons(album)}
@@ -1069,7 +1160,7 @@ function imageGalleryMarkup(gallery, albumId = 'a') {
     // 不直接给 src：先留占位，缩略图进视口时才生成（见 fillGalleryThumb）
     return `<button type="button" class="gallery-thumb" data-gallery-index="${img.index}"
               title="${esc(img.name)}（点击看原图）">
-              <img data-gallery-src="${esc(img.url)}"
+              <img data-gallery-src="${esc(appUrl(img.url))}"
                    data-gallery-key="g${albumId}-${img.index}-${img.size ?? 0}"
                    alt="${esc(img.name)}" />
             </button>`;
@@ -1093,7 +1184,7 @@ function renderLightbox() {
   const { images, index } = lightboxState;
   const img = images[index];
   if (!img) { closeLightbox(); return; }
-  $('#lightboxImg').src = img.url;
+  $('#lightboxImg').src = appUrl(img.url);
   $('#lightboxImg').alt = img.name;
   $('#lightboxCaption').textContent =
     `${index + 1} / ${images.length}${img.group ? ` · ${img.group}` : ''} · ${img.name}`;
@@ -1188,7 +1279,7 @@ async function openAlbum(id, { push = true } = {}) {
           </button>
           <button class="btn" id="circleBtn" title="仅记录在软件内，不写回文件">填写社团</button>
           ${archiveCacheButtons(album)}
-          <button class="btn" id="revealAlbumBtn">
+          <button class="btn" id="revealAlbumBtn"${runtime.reveal ? '' : ' hidden'}>
             <svg viewBox="0 0 24 24"><path d="M3 7h5l2 2h11v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> 打开文件夹
           </button>
         </div>
@@ -1220,7 +1311,7 @@ async function openAlbum(id, { push = true } = {}) {
     await loadTagBar(); // 自动建立的同名标签要立刻出现在专辑墙上方的「社团」栏
     openAlbum(album.id, { push: false });
   });
-  $('#revealAlbumBtn').addEventListener('click', () => {
+  $('#revealAlbumBtn')?.addEventListener('click', () => {
     api('/api/reveal', { method: 'POST', body: { path: tracks[0]?.path } }).catch(() => {});
   });
   bindDetailCacheActions(album);
@@ -1350,7 +1441,7 @@ async function openVoiceAlbum(data, { push = true, gallery = null } = {}) {
     playQueue(q, 0, { cover: album.cover_url, label: `音声《${album.album}》` });
   });
   $('#tagAlbumBtn').addEventListener('click', () => openTagDialog([album.id], album.tags ?? []));
-  $('#revealAlbumBtn').addEventListener('click', () => {
+  $('#revealAlbumBtn')?.addEventListener('click', () => {
     api('/api/reveal', { method: 'POST', body: { path: album.release_root } }).catch(() => {});
   });
   $('#rjCopyBtn')?.addEventListener('click', async () => {
@@ -1492,7 +1583,7 @@ function openVideoModal(trackId, title, label) {
         <span>${esc(title)} · ${esc(label ?? '视频版')}</span>
         <button class="icon-btn" id="videoClose">✕</button>
       </div>
-      <video src="/api/stream/${trackId}" controls autoplay playsinline></video>
+      <video src="${esc(appUrl(`/api/stream/${trackId}`))}" controls autoplay playsinline></video>
     </div>`;
   document.body.appendChild(el);
   // 视频音量跟主音量一致（>100% 的软件放大只作用于音频链路，这里封顶 100%）
@@ -1684,7 +1775,7 @@ function trackRowMarkup(track, index, { showAlbum = true } = {}) {
         <button type="button" class="icon-btn" data-lyrics="${track.id}" title="查看歌词">
           <svg viewBox="0 0 24 24"><path d="M4 6h16M4 11h10M4 16h13"/></svg>
         </button>
-        <button class="icon-btn" data-reveal="${track.id}" title="在资源管理器中显示">
+        <button class="icon-btn"${runtime.reveal ? '' : ' hidden'} data-reveal="${track.id}" title="在资源管理器中显示">
           <svg viewBox="0 0 24 24"><path d="M3 7h5l2 2h11v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         </button>
       </div>
@@ -2071,7 +2162,7 @@ async function loadStats() {
     </div>`;
 
   $('#exportAssetsBtn').addEventListener('click', () => {
-    window.location.href = '/api/backup/export?download=1';
+    window.location.href = appUrl('/api/backup/export?download=1');
   });
   $('#snapshotBtn').addEventListener('click', async () => {
     const res = await api('/api/backup/snapshot', { method: 'POST', body: {} });
@@ -2364,6 +2455,8 @@ function broadcastCurrentPlayback() {
 async function refreshDesktopLyricsButton() {
   const btn = $('#desktopLyricsBtn');
   if (!btn) return;
+  btn.hidden = !runtime.desktopLyrics;
+  if (!runtime.desktopLyrics) return;
   try {
     const st = await api('/api/desktop-lyrics');
     btn.classList.toggle('is-on', st.open === true);
@@ -2376,6 +2469,7 @@ async function refreshDesktopLyricsButton() {
 }
 
 async function toggleDesktopLyrics() {
+  if (!runtime.desktopLyrics) return;
   try {
     const st = await api('/api/desktop-lyrics');
     if (!st.available) { toast('桌面歌词仅桌面版支持', true); return; }
@@ -2430,7 +2524,7 @@ function playAt(index, { record = true } = {}) {
     else buildShuffleOrder(index);
   }
   const track = state.queue[index];
-  audio.src = track.stream_url ?? `/api/stream/${track.id}`;
+  audio.src = appUrl(track.stream_url ?? `/api/stream/${track.id}`);
   audio.play().catch((err) => toast(`无法播放：${err.message}`, true));
   updateNowPlaying(track);
   loadLyricsFor(track);
@@ -2443,7 +2537,7 @@ function updateNowPlaying(track) {
   $('#npArtist').textContent = [track.artist ?? track.album_artist, track.album_title ?? track.album]
     .filter(Boolean).join(' · ');
 
-  const cover = state.nowCover ?? (track.cover_hash ? `/api/cover/${track.cover_hash}` : null);
+  const cover = appUrl(state.nowCover ?? (track.cover_hash ? `/api/cover/${track.cover_hash}` : ''));
   $('#npCover').style.backgroundImage = cover ? `url("${cover}")` : '';
   $('#npBigCover').style.backgroundImage = cover ? `url("${cover}")` : '';
   // 单曲详情：大字标题 + 「艺术家：X  社团：Y」
@@ -2936,7 +3030,7 @@ function fieldMarkup({ key, label, type, value, hint }) {
 function renderEditDrawer() {
   const a = editState.album;
   const tracks = editState.tracks;
-  const coverUrl = a.cover_url;
+  const coverUrl = appUrl(a.cover_url);
   const pending = editState.pendingCover;
 
   $('#editBody').innerHTML = `
@@ -3755,7 +3849,7 @@ function bindEvents() {
       return;
     }
     const reveal = e.target.closest('[data-reveal]');
-    if (reveal) {
+    if (reveal && runtime.reveal) {
       e.stopPropagation();
       api('/api/reveal', { method: 'POST', body: { trackId: Number(reveal.dataset.reveal) } })
         .catch((err) => toast(err.message, true));
@@ -3961,11 +4055,20 @@ function bindEvents() {
     $('#libError').hidden = true;
     $('#libPathInput').value = '';
     $('#libNameInput').value = '';
+    $('#libPathInput').placeholder = runtime.nativeDialogs ? '例如 E:\\Music' : '例如 /media/music';
+    $('#libPathHint').textContent = runtime.nativeDialogs
+      ? '选择一个包含音乐的文件夹，软件会递归扫描其中的音频文件。'
+      : '输入或浏览服务器（容器）内的媒体路径，例如 /media/music，不是当前电脑的目录。';
     $('#libraryDialog').showModal();
     setTimeout(() => $('#libPathInput').focus(), 40);
   });
   $('#cancelLibBtn').addEventListener('click', () => $('#libraryDialog').close());
   $('#browseBtn').addEventListener('click', async () => {
+    if (!runtime.nativeDialogs) {
+      const path = await chooseServerDirectory($('#libPathInput').value.trim());
+      if (path) { $('#libPathInput').value = path; $('#libError').hidden = true; }
+      return;
+    }
     const btn = $('#browseBtn');
     btn.disabled = true;
     btn.textContent = '等待选择…';
@@ -4315,7 +4418,7 @@ function bindEvents() {
   $('#lightboxNext').addEventListener('click', (e) => { e.stopPropagation(); stepLightbox(1); });
   $('#lightboxOpenBtn').addEventListener('click', () => {
     const img = lightboxState.images[lightboxState.index];
-    if (img) window.open(img.url, '_blank');
+    if (img) window.open(appUrl(img.url), '_blank');
   });
   // 点背景关闭；点图片本身不关闭（免得看细节时误触）
   $('#lightbox').addEventListener('click', (e) => {
@@ -4552,7 +4655,7 @@ const GIB = 1024 ** 3;
 
 const settingsState = { config: null, cache: null, exclusions: [] };
 
-const bgImageUrl = (p) => (p ? `/api/local-image?path=${encodeURIComponent(p)}` : '');
+const bgImageUrl = (p) => (p ? (/^data:image\//i.test(p) ? p : appUrl(`/api/local-image?path=${encodeURIComponent(p)}`)) : '');
 
 /**
  * 外观即时套用：只写 CSS 变量与 data-* 属性，不重启动、不刷新。
@@ -4637,7 +4740,7 @@ function settingsMarkup() {
   const cache = settingsState.cache ?? {};
   const desktop = cfg.desktop ?? { minimizeToTray: false };
   // 浏览器里运行时没有托盘可言，如实说明（避免用户以为设置没生效）
-  const desktopShell = /electron/i.test(navigator.userAgent);
+  const desktopShell = runtime.tray;
   const exclusions = settingsState.exclusions ?? [];
 
   const used = Number(cache.bytes ?? 0);
@@ -4749,12 +4852,12 @@ function settingsMarkup() {
             <button class="btn btn-ghost" id="setBgPick">选择图片…</button>
             <button class="btn btn-ghost" id="setBgClear">移除背景</button>
           </div>
-          <div class="set-note" id="setBgPath">${app.bgImage ? esc(app.bgImage) : '支持 jpg / png / webp / gif / bmp。'}</div>
+          <div class="set-note" id="setBgPath">${app.bgImage ? (/^data:/i.test(app.bgImage) ? '已上传背景图片' : esc(app.bgImage)) : '支持 jpg / png / webp / gif / bmp。'}</div>
         </div>
       </div>
     </section>
 
-    <section class="set-sec">
+    ${desktopShell ? `<section class="set-sec">
       <h4>桌面</h4>
       <div class="set-row">
         <div class="set-label">关闭窗口时</div>
@@ -4770,10 +4873,9 @@ function settingsMarkup() {
     ? '点窗口的 × 只是收进托盘，播放与扫描照常继续；要真正退出请用托盘菜单的「退出 Luna」或菜单栏「文件 → 退出」。'
     : '点窗口的 × 直接退出 Luna（当前行为）。'}
           </div>
-          ${desktopShell ? '' : '<div class="set-note is-warn">⚠ 当前不是桌面版（在浏览器里打开）：没有托盘可用，该设置不会生效。</div>'}
         </div>
       </div>
-    </section>
+    </section>` : ''}
 
     <section class="set-sec">
       <h4>快捷键 <span class="set-sec-tag">播放器</span></h4>
@@ -5080,7 +5182,8 @@ function bindSettingsBody() {
   opacity?.addEventListener('change', () => saveAppearance({ bgOpacity: Number(opacity.value) }));
 
   $('#setBgPick')?.addEventListener('click', async () => {
-    // 优先用系统原生选图框；不可用时退回浏览器文件选择
+    if (!runtime.nativeDialogs) { $('#settingsBgFileInput').click(); return; }
+    // 桌面版使用系统原生选图框；不可用时退回浏览器文件选择
     try {
       const r = await api('/api/dialog/image', { method: 'POST', body: {} });
       if (r.cancelled) return;
@@ -5097,6 +5200,11 @@ function bindSettingsBody() {
   });
 
   $('#setCacheDirPick')?.addEventListener('click', async () => {
+    if (!runtime.nativeDialogs) {
+      const path = await chooseServerDirectory($('#setCacheDir').value.trim());
+      if (path) $('#setCacheDir').value = path;
+      return;
+    }
     try {
       const r = await api('/api/dialog/folder', { method: 'POST', body: {} });
       if (r.cancelled) return;
@@ -5183,6 +5291,7 @@ function bindSettingsEvents() {
       界面初始化失败：${esc(err.message)}<br />请刷新页面；若持续出现，请查看浏览器控制台。</div>`;
     return;
   }
+  await loadRuntime();
   // 设置：先绑事件再拉配置，保证外观在整个界面画出来之前就位（避免主题闪一下）
   bindSettingsEvents();
   await loadSettingsConfig();

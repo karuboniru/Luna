@@ -19,7 +19,8 @@
     "test:full": "node tools/check/run.mjs --full",
     "test:list": "node tools/check/run.mjs --list",
     "release": "node tools/release/build.mjs",
-    "dist": "node tools/release/build.mjs"
+    "dist": "node tools/release/build.mjs",
+    "test:nas": "node --test test/user-path.test.mjs test/asmr.test.mjs test/nas-paths.test.mjs test/nas-scanner.test.mjs test/voice-library.test.mjs test/asmr-tag.test.mjs test/dlsite.test.mjs test/gallery.test.mjs test/archive-cover.test.mjs test/zip-reader.test.mjs test/web-host.test.mjs test/web-urls.test.mjs test/web-service.test.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

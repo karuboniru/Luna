@@ -384,6 +384,7 @@ select {
 }
 .album-cover .overlay {
   position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: flex-end;
+  z-index: 2;
   gap: 8px; padding: 10px; opacity: 0; transition: opacity .2s;
   background: linear-gradient(180deg, transparent 45%, rgba(0,0,0,.62));
 }
@@ -1622,3 +1623,17 @@ body.is-np-resizing, body.is-np-resizing * { cursor: col-resize !important; user
 :root[data-mode="light"] .job-history-row .jh-status.is-failed,
 :root[data-mode="light"] .set-note.is-error { color: var(--danger); }
 
+
+/* Server directory picker for browser / NAS deployments. */
+html[data-runtime="web"] #desktopLyricsBtn,
+html[data-runtime="web"] #revealAlbumBtn,
+html[data-runtime="web"] [data-reveal] { display: none; }
+.directory-location, .directory-toolbar { display: flex; gap: 8px; align-items: center; }
+.directory-location input { min-width: 0; flex: 1; }
+.directory-toolbar { margin: 10px 0; }
+.directory-toolbar .hint { margin: 0; }
+.directory-list { max-height: min(40vh, 320px); overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.directory-list:empty { border: 0; }
+.directory-entry { display: block; width: 100%; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--fg); padding: 11px 14px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.directory-entry:last-child { border-bottom: 0; }
+.directory-entry:hover, .directory-entry:focus-visible { background: var(--bg-l2); }

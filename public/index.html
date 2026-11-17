@@ -1,20 +1,20 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-runtime="web">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Luna · 本地音乐与音声库</title>
-<link rel="stylesheet" href="/styles.css" />
-<link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png" />
-<link rel="icon" type="image/png" sizes="64x64" href="/icon-64.png" />
-<link rel="apple-touch-icon" href="/icon.png" />
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" type="image/png" sizes="32x32" href="icon-32.png" />
+<link rel="icon" type="image/png" sizes="64x64" href="icon-64.png" />
+<link rel="apple-touch-icon" href="icon.png" />
 </head>
 <body>
 
 <div class="app">
   <aside class="sidebar">
     <div class="brand">
-      <img class="brand-mark" src="/icon-64.png" alt="Luna" width="32" height="32" />
+      <img class="brand-mark" src="icon-64.png" alt="Luna" width="32" height="32" />
       <div>
         <div class="brand-title">Luna</div>
         <div class="brand-sub" id="brandSub">未连接</div>
@@ -249,8 +249,8 @@
 <dialog class="dlg" id="libraryDialog">
   <form method="dialog">
     <h3>添加音乐目录</h3>
-    <p class="hint">选择一个包含音乐的文件夹，软件会递归扫描其中的音频文件。</p>
-    <input type="text" id="libPathInput" placeholder="例如 E:\Music" spellcheck="false" />
+    <p class="hint" id="libPathHint">选择服务器上包含音乐的文件夹，软件会递归扫描其中的音频文件。</p>
+    <input type="text" id="libPathInput" placeholder="例如 /media/music" spellcheck="false" />
     <input type="text" id="libNameInput" placeholder="库显示名（可选，留空取文件夹名）" spellcheck="false" />
     <div class="dlg-actions">
       <button class="btn" value="browse" id="browseBtn" type="button">浏览…</button>
@@ -259,6 +259,28 @@
       <button class="btn btn-primary" value="ok" type="button" id="confirmLibBtn">添加并扫描</button>
     </div>
     <div class="dlg-error" id="libError" hidden></div>
+  </form>
+</dialog>
+
+<dialog class="dlg" id="directoryDialog">
+  <form method="dialog">
+    <h3>浏览服务器目录</h3>
+    <p class="hint">这里显示服务器或容器内的目录。请选择已挂载的媒体目录。</p>
+    <div class="directory-location">
+      <input type="text" id="directoryPath" aria-label="服务器目录路径" spellcheck="false" />
+      <button class="btn" type="button" id="directoryGo">前往</button>
+    </div>
+    <div class="directory-toolbar">
+      <button class="btn btn-ghost" type="button" id="directoryParent">上一级</button>
+      <span id="directoryStatus" class="hint" role="status"></span>
+    </div>
+    <div class="directory-list" id="directoryList"></div>
+    <div class="dlg-error" id="directoryError" role="alert" hidden></div>
+    <div class="dlg-actions">
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" type="button" id="directoryCancel">取消</button>
+      <button class="btn btn-primary" type="button" id="directorySelect">选择此目录</button>
+    </div>
   </form>
 </dialog>
 
@@ -400,6 +422,6 @@
 <div class="toast" id="toast" hidden></div>
 
 <audio id="audio" preload="metadata"></audio>
-<script src="/app.js" type="module"></script>
+<script src="app.js" type="module"></script>
 </body>
 </html>

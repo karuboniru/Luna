@@ -1,3 +1,5 @@
+import { appUrl } from './app-url.js';
+
 /*
  * 桌面歌词窗口逻辑。
  *
@@ -333,7 +335,7 @@ function startHello() {
 /* ------------------------------------------------------------- 窗口控制 */
 
 async function post(action, extra = {}) {
-  const res = await fetch('/api/desktop-lyrics', {
+  const res = await fetch(appUrl('/api/desktop-lyrics'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, ...extra }),
@@ -385,7 +387,7 @@ $('#dl').addEventListener('contextmenu', (event) => {
 /** 主进程改完设置后回调它，把最新的配置重新应用一遍 */
 async function refreshFromServer() {
   try {
-    const data = await (await fetch('/api/config')).json();
+    const data = await (await fetch(appUrl('/api/config'))).json();
     const cfg = data.config?.desktopLyrics ?? {};
     applyMode(data.config);
     applyScale(cfg.fontScale ?? 1);
@@ -393,7 +395,7 @@ async function refreshFromServer() {
     applyStyle({ color: cfg.color ?? DEFAULT_COLOR, outline: cfg.outline ?? DEFAULT_OUTLINE });
   } catch { /* 读不到就保持现状 */ }
   try {
-    const state = await (await fetch('/api/desktop-lyrics')).json();
+    const state = await (await fetch(appUrl('/api/desktop-lyrics'))).json();
     setLocked(state.locked === true);
   } catch { /* 同上 */ }
 }
@@ -470,7 +472,7 @@ window.addEventListener('resize', () => {
 
 async function boot() {
   try {
-    const data = await (await fetch('/api/config')).json();
+    const data = await (await fetch(appUrl('/api/config'))).json();
     const cfg = data.config?.desktopLyrics ?? {};
     applyMode(data.config);
     applyScale(cfg.fontScale ?? 1);
@@ -479,7 +481,7 @@ async function boot() {
   } catch { /* 配置读不到就用默认外观 */ }
 
   try {
-    const state = await (await fetch('/api/desktop-lyrics')).json();
+    const state = await (await fetch(appUrl('/api/desktop-lyrics'))).json();
     setLocked(state.locked);
   } catch { /* 非桌面环境不会走到这里 */ }
 }
@@ -497,7 +499,7 @@ boot();
  */
 setInterval(async () => {
   try {
-    const state = await (await fetch('/api/desktop-lyrics')).json();
+    const state = await (await fetch(appUrl('/api/desktop-lyrics'))).json();
     if (state.open && Boolean(state.locked) !== locked) setLocked(Boolean(state.locked));
   } catch { /* 窗口正在关闭时忽略 */ }
 }, 1000);
