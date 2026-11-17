@@ -1,0 +1,35 @@
+services:
+  luna:
+    image: ghcr.io/karuboniru/luna:${LUNA_IMAGE_TAG:-latest}
+    # Build the checked-out source with: docker compose build
+    build: .
+    user: "${LUNA_UID:-1000}:${LUNA_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8787"
+      LAM_DATA_DIR: /data
+      LAM_CACHE_DIR: /cache
+      LAM_MEDIA_DIR: /media
+      BASE_PATH: ${BASE_PATH:-}
+    # Host reverse proxy only. Set LUNA_BIND_IP explicitly for direct LAN access.
+    ports:
+      - "${LUNA_BIND_IP:-127.0.0.1}:${LUNA_PORT:-8787}:8787"
+    volumes:
+      - type: bind
+        source: ${LUNA_DATA_DIR:-./luna-data}
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${LUNA_CACHE_DIR:-./luna-cache}
+        target: /cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${LUNA_MEDIA_DIR:?Set LUNA_MEDIA_DIR to an existing NAS media directory}
+        target: /media
+        read_only: true
+        bind:
+          create_host_path: false

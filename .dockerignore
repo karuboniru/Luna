@@ -1,0 +1,15 @@
+# Allow only runtime sources and dependency manifests into the build context.
+# User databases, media, external indexes, credentials and Electron stay outside.
+**
+!Dockerfile
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!LICENSE
+!server/
+!server/**
+!public/
+!public/**
+!tools/
+!tools/check/
+!tools/check/container-health.mjs

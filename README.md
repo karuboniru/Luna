@@ -1,5 +1,7 @@
 # Luna · 本地音乐与音声库
 
+> **NAS / Linux 网页版 fork**：支持 Docker、根路径或 `BASE_PATH=/luna` 子路径部署。镜像：`ghcr.io/karuboniru/luna:latest`；[部署说明](docs/NAS部署.md) · [构建与发布](https://github.com/karuboniru/Luna/actions/workflows/nas-container.yml)。下方保留原版桌面功能说明，托盘与置顶歌词仅在 Electron 中提供。
+
 > **V1.2.9** · Windows 桌面应用 · 本地运行、不联网、不上传任何数据
 
 把堆在硬盘里、数量庞大又没分类的专辑，整理成一面**可浏览、可检索、可播放**的专辑墙。
