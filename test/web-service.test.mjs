@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { crc32 } from 'node:zlib';
 
 function wave() {
   const b = Buffer.alloc(44 + 8000);
@@ -14,6 +15,30 @@ function wave() {
   b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
   b.write('data', 36); b.writeUInt32LE(8000, 40);
   return b;
+}
+
+function storedZip(entries) {
+  const files = [], central = [];
+  let offset = 0;
+  for (const [filename, data] of entries) {
+    const name = Buffer.from(filename);
+    const local = Buffer.alloc(30), record = Buffer.alloc(46);
+    local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x800, 6); local.writeUInt32LE(crc32(data), 14);
+    local.writeUInt32LE(data.length, 18); local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    record.writeUInt32LE(0x02014b50); record.writeUInt16LE(20, 4); record.writeUInt16LE(20, 6);
+    record.writeUInt16LE(0x800, 8); record.writeUInt32LE(crc32(data), 16);
+    record.writeUInt32LE(data.length, 20); record.writeUInt32LE(data.length, 24);
+    record.writeUInt16LE(name.length, 28); record.writeUInt32LE(offset, 42);
+    files.push(local, name, data); central.push(record, name);
+    offset += local.length + name.length + data.length;
+  }
+  const directory = Buffer.concat(central), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50); end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...files, directory, end]);
 }
 
 async function start(root, base) {
@@ -126,5 +151,20 @@ for (const base of ['', '/apps/luna']) {
     assert.equal((await api('/api/tracks')).tracks.length, 1);
     assert.equal((await api('/api/config')).config.appearance.bgImage, 'data:image/png;base64,abcd');
     assert.equal((await api(`/api/albums/${albums[0].id}`)).album.favorite, true);
+
+    const voice = path.join(root, 'media', 'ASMR');
+    await fs.mkdir(voice);
+    await fs.writeFile(path.join(voice, 'RJ123456.zip'), storedZip([
+      ['01 音声.wav', wav], ['01 音声.lrc', Buffer.from('[00:00.00]ZIP lyrics')],
+    ]));
+    await api('/api/libraries', { path: voice, scan: true });
+    for (let i = 0; i < 200 && (await api('/api/scan/status')).running; i++) await delay(30);
+    const archived = (await api('/api/tracks?includeVoice=1')).tracks.find((item) => item.archive_id);
+    assert.ok(archived, 'ZIP member was indexed');
+    const archiveStream = await fetch(service.origin + archived.stream_url, { headers: { Range: 'bytes=0-43' } });
+    assert.equal(archiveStream.status, 206);
+    assert.deepEqual(Buffer.from(await archiveStream.arrayBuffer()), wav.subarray(0, 44));
+    assert.match(JSON.stringify(await api(`/api/tracks/${archived.id}/lyrics`)), /ZIP lyrics/);
+    assert.ok((await fs.readdir(path.join(root, 'cache'))).length > 0, 'ZIP playback uses configured persistent cache');
   });
 }

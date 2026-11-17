@@ -4,7 +4,7 @@
 
 ## 使用 Compose
 
-需要 Docker Engine 与 Compose v2，处理器为 `linux/amd64` 或 `linux/arm64`。镜像地址为 `ghcr.io/karuboniru/luna`。首次发布后的 GHCR 包可能默认为私有；维护者需在 GitHub Packages 的包设置中确认可见性为 Public，匿名拉取才会成功。发布是否成功以 [Actions 运行结果](https://github.com/karuboniru/Luna/actions/workflows/nas-container.yml) 和实际拉取结果为准。
+需要 Docker Engine 与 Compose v2，处理器为 `linux/amd64` 或 `linux/arm64`。镜像地址为 `ghcr.io/karuboniru/luna`，首次发布已验证可匿名访问，无需 GitHub 登录。发布状态以 [Actions 运行结果](https://github.com/karuboniru/Luna/actions/workflows/nas-container.yml) 和实际拉取结果为准。
 
 将仓库的 `compose.yaml` 放到部署目录，例如 `/srv/luna`，准备持久目录并配置权限：
 
